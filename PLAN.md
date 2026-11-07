@@ -20,7 +20,7 @@ From the Claude phone app, Jamie shares a recipe link (TikTok, Facebook, Instagr
 | Mealie (exists) | Proxmox LXC | `mealie.jamesorjamie.com` |
 | Authentik (new) | Proxmox LXC via community-scripts | `auth.jamesorjamie.com` |
 | Mealie MCP server (this repo) | Proxmox LXC, systemd, no Docker | `mealie-mcp.jamesorjamie.com` |
-| Cloudflare Tunnel | its own small LXC (or an existing one) | routes the two new hostnames |
+| Nginx Proxy Manager (exists) | already publishes Mealie via UniFi port forward | adds the two new hostnames |
 
 Claude's servers (not the phone) call the MCP endpoint, so it **must** be public HTTPS with OAuth. Only `/mcp`, the OAuth discovery routes and `/healthz` get exposed. Mealie's API key never leaves the MCP LXC.
 
@@ -76,11 +76,11 @@ Claude Code prints each step, waits for confirmation, verifies over SSH only if 
 3. **[HUMAN]** Mealie → Profile → API Tokens → `mcp-server`; paste into the env file.
 4. Start with `AUTHENTIK_*` commented out. From the LAN: `curl http://<ip>:8000/healthz`, then MCP Inspector at `http://<ip>:8000/mcp`; confirm `get_recipes` and one `import_recipe_from_url`.
 
-### 3c. Cloudflare Tunnel
-1. **[HUMAN]** Reuse whatever exposes `mealie.jamesorjamie.com` today, or create a tunnel (community-scripts has a cloudflared LXC).
-2. `auth.jamesorjamie.com` → `http://<authentik-ip>:9000`; `mealie-mcp.jamesorjamie.com` → `http://<mcp-ip>:8000`.
-3. Do **not** put Cloudflare Access in front of `mealie-mcp` (Claude's backend can't pass it). Optional WAF rule: allow only `/mcp`, `/.well-known/*`, `/healthz`.
-4. Confirm Authentik redirects come back as `https://auth.jamesorjamie.com`.
+### 3c. Publish via Nginx Proxy Manager
+Mealie is already public through UniFi port forwarding to Nginx Proxy Manager (confirmed from the response headers: `server: openresty`, `x-served-by`). Reuse it:
+1. **[HUMAN]** DNS `A` records for `auth.` and `mealie-mcp.jamesorjamie.com` → same IP as `mealie.`.
+2. **[HUMAN]** NPM proxy hosts with Let's Encrypt: `auth.` → `<authentik-ip>:9000` (websockets on); `mealie-mcp.` → `<mcp-ip>:8000` with the Advanced snippet from `deploy/README.md` (path allowlist plus `proxy_buffering off`).
+3. No NPM access list and no Cloudflare Access on `mealie-mcp`; OAuth is the gate.
 
 ### 3d. Authentik provider
 Per upstream README "OAuth / Authentik Setup": slug `mealie-mcp`, Confidential, strict redirect `https://claude.ai/api/mcp/auth_callback`, access token `hours=12`, refresh `days=30`, scopes `openid email profile offline_access`. Application `Mealie MCP`, bound to Jamie's user only. Client ID → `AUTHENTIK_AUDIENCE`. Uncomment `AUTHENTIK_*`, restart, then:
@@ -96,7 +96,7 @@ Per upstream README "OAuth / Authentik Setup": slug `mealie-mcp`, Confidential, 
 - Add both LXCs to the Proxmox backup job.
 - Authentik updates: re-run the community script inside its LXC and pick update.
 - `git fetch upstream && git merge upstream/main`; Jamie-only files are `deploy/`, `PLAN.md`, the import tools/prompt, `tests/test_import_tools.py`.
-- Optional Cloudflare rate limit on `mealie-mcp`.
+- Optional: rate limit `mealie-mcp` (nginx `limit_req` in the NPM host, or Cloudflare if you move to a tunnel).
 
 ## Guardrails
 - Never commit env files, API keys, client secrets or LXC IPs.
@@ -105,7 +105,7 @@ Per upstream README "OAuth / Authentik Setup": slug `mealie-mcp`, Confidential, 
 - Small commits, one per sub-phase, with tests.
 
 ## Open questions for Jamie
-1. How is `mealie.jamesorjamie.com` exposed today?
-2. Mealie version (`/api/app/about`): must be v3.30.0+.
+1. ~~How is Mealie exposed?~~ UniFi port forward → Nginx Proxy Manager. Answered.
+2. Mealie reports `"version": "develop"`, so the v3.30.0+ requirement can't be read from the API. The first LAN test in 3b (a URL import plus `get_recipe_detailed`) is the real check.
 3. SSH access to the new LXCs for Claude Code, or scripts only?
 4. Upstream's `create_recipe` instructions tell the assistant to tag `my-recipes` (the original author's library convention). Harmless (unknown tags are dropped) but worth replacing with your own default tag.

@@ -1,6 +1,6 @@
 # Deploying on Proxmox (no Docker)
 
-Three LXCs end up involved: the Mealie one you already have, **Authentik** (new), and **mealie-mcp** (new). Cloudflare Tunnel publishes two hostnames:
+Three LXCs end up involved: the Mealie one you already have, **Authentik** (new), and **mealie-mcp** (new). The Nginx Proxy Manager that already publishes `mealie.jamesorjamie.com` (UniFi forwards 443 to it) publishes two more hostnames:
 
 | Hostname | Goes to |
 |---|---|
@@ -43,16 +43,34 @@ Script notes: config is `/etc/authentik/config.yml`, per-service settings in `/e
    ```
    Transport "Streamable HTTP", URL `http://<mcp-ip>:8000/mcp`. Run `get_recipes`, then `import_recipe_from_url` with a real blog recipe.
 
-## 3. Cloudflare Tunnel
+## 3. Publish the hostnames (Nginx Proxy Manager)
 
-Reuse the tunnel that serves `mealie.jamesorjamie.com` if there is one; otherwise create one (community-scripts has a cloudflared LXC).
+1. **DNS:** at your DNS provider, add `A` records for `auth.jamesorjamie.com` and `mealie-mcp.jamesorjamie.com` pointing to the same public IP as `mealie.jamesorjamie.com`.
+2. **NPM, Proxy Host `auth.jamesorjamie.com`:**
+   - Scheme `http`, forward to `<authentik-ip>`, port `9000`
+   - Turn on **Websockets Support** and **Block Common Exploits**
+   - SSL tab: request a new Let's Encrypt certificate, **Force SSL**, **HTTP/2**
+3. **NPM, Proxy Host `mealie-mcp.jamesorjamie.com`:**
+   - Scheme `http`, forward to `<mcp-ip>`, port `8000`
+   - **Block Common Exploits** on; Websockets not needed
+   - SSL tab: Let's Encrypt, **Force SSL**, **HTTP/2**
+   - **Advanced** tab, paste this. It only exposes what Claude needs, and stops nginx from buffering the MCP event stream:
+     ```nginx
+     if ($uri !~ "^/(mcp/?$|healthz$|\.well-known/)") {
+         return 404;
+     }
+     proxy_buffering off;
+     proxy_cache off;
+     proxy_read_timeout 300s;
+     ```
+4. From your phone on cellular (off Wi-Fi, so you're really coming from outside):
+   - `https://auth.jamesorjamie.com` shows the Authentik login page
+   - `https://mealie-mcp.jamesorjamie.com/healthz` shows `{"ok":true}`
+   - `https://mealie-mcp.jamesorjamie.com/` is a 404, which is the point
 
-- Dashboard-managed tunnel: Zero Trust → Networks → Tunnels → Public Hostnames. Add both hostnames. For `mealie-mcp`, set the **path** to `^/(mcp/?|healthz|\.well-known/.*)$`.
-- Config-file tunnel: see [`cloudflared/config.yml.example`](cloudflared/config.yml.example).
+Don't put an NPM Access List (basic auth or an IP allowlist) on `mealie-mcp`: Claude's servers make the calls from Anthropic's IPs and can't answer a password prompt. Authentik OAuth is the lock.
 
-**Don't** put Cloudflare Access in front of `mealie-mcp`. Claude's servers make the calls and can't get through an Access login; Authentik OAuth is the lock.
-
-Check `https://auth.jamesorjamie.com` loads the login page over HTTPS.
+*Alternative:* a Cloudflare Tunnel also works if you'd rather not forward ports; see [`cloudflared/config.yml.example`](cloudflared/config.yml.example). Don't put Cloudflare Access in front of `mealie-mcp` either.
 
 ## 4. Authentik provider for the MCP server
 
@@ -119,4 +137,6 @@ Add both new LXCs to your Proxmox backup job.
 - **Server refuses to start, mentions AUTHENTIK_AUDIENCE**: you set `AUTHENTIK_ISSUER` without `AUTHENTIK_AUDIENCE`. Set both, or neither.
 - **Claude says the connector failed to authorize**: check the redirect URI is exactly `https://claude.ai/api/mcp/auth_callback` and that your user is bound to the application.
 - **Every token is rejected (401 after login)**: the issuer in the env file must match the provider's "OpenID Configuration Issuer" exactly, trailing slash included, and the audience must be that provider's Client ID.
+- **Claude connects, then hangs or times out on tool calls**: NPM is buffering the stream. Check the `proxy_buffering off;` lines are in the mealie-mcp host's Advanced tab.
+- **Authentik login loops or redirects to `http://`**: turn on Websockets Support for the auth host and keep Force SSL on; NPM sends `X-Forwarded-Proto`, which Authentik trusts by default.
 - **Imports from a site fail**: some sites block scrapers. Paste the recipe text in the chat instead and Claude builds it with `create_recipe`.
