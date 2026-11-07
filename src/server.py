@@ -23,11 +23,16 @@ load_dotenv()
 log_level_name = os.getenv("LOG_LEVEL", "INFO")
 log_level = getattr(logging, log_level_name.upper(), logging.INFO)
 
-# Configure logging
+# Configure logging: stdout always (journald or docker logs pick it up), plus a file
+# only when LOG_FILE is set
+_log_handlers: list[logging.Handler] = [logging.StreamHandler()]
+_log_file = os.getenv("LOG_FILE", "").strip()
+if _log_file:
+    _log_handlers.append(logging.FileHandler(_log_file))
 logging.basicConfig(
     level=log_level,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(), logging.FileHandler("mealie_mcp_server.log")],
+    handlers=_log_handlers,
 )
 logger = logging.getLogger("mealie-mcp")
 
@@ -45,8 +50,8 @@ if _authentik_issuer:
 
 mcp = FastMCP(
     "mealie",
-    host="0.0.0.0",
-    port=8000,
+    host=os.getenv("MCP_HOST", "0.0.0.0"),
+    port=int(os.getenv("MCP_PORT", "8000")),
     auth=_auth_settings,
     token_verifier=_token_verifier,
 )
@@ -78,6 +83,12 @@ def _internal_discovery_url() -> tuple[str, dict]:
         return url, headers
     issuer = (_authentik_issuer or "").rstrip("/")
     return f"{issuer}/.well-known/openid-configuration", {}
+
+
+@mcp.custom_route("/healthz", methods=["GET"])
+async def healthz(request: Request) -> Response:
+    """Liveness check for systemd, Proxmox and Cloudflare. No auth, no Mealie call."""
+    return JSONResponse({"ok": True})
 
 
 @mcp.custom_route("/.well-known/oauth-authorization-server", methods=["GET"])
