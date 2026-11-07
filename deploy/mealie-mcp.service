@@ -1,0 +1,36 @@
+[Unit]
+Description=Mealie MCP server
+Documentation=https://github.com/amercat37/mealie-mcp-server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mealie-mcp
+Group=mealie-mcp
+WorkingDirectory=/opt/mealie-mcp/app
+EnvironmentFile=/etc/mealie-mcp/mealie-mcp.env
+ExecStart=/opt/mealie-mcp/app/.venv/bin/python src/server.py
+Restart=on-failure
+RestartSec=5
+
+# Optional log file: set LOG_FILE=/var/log/mealie-mcp/mealie_mcp_server.log in the
+# env file. systemd creates the directory, owned by the service user.
+LogsDirectory=mealie-mcp
+
+# Hardening. If the service fails with status 226/NAMESPACE, turn on
+# Options > Features > Nesting for the LXC in Proxmox (or comment these out).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

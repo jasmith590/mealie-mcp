@@ -1,0 +1,21 @@
+# cloudflared ingress for a locally managed tunnel (/etc/cloudflared/config.yml).
+# If your tunnel is managed in the Cloudflare dashboard (installed with a token),
+# this file is ignored: add the same hostnames, paths and services under
+# Zero Trust > Networks > Tunnels > your tunnel > Public Hostnames instead.
+tunnel: <tunnel-uuid>
+credentials-file: /etc/cloudflared/<tunnel-uuid>.json
+
+ingress:
+  # Only the MCP endpoint, OAuth discovery and the health check are public.
+  # Do NOT put Cloudflare Access in front of this host: Claude's servers can't log in to it.
+  - hostname: mealie-mcp.jamesorjamie.com
+    path: ^/(mcp/?|healthz|\.well-known/.*)$
+    service: http://192.168.1.52:8000
+  - hostname: mealie-mcp.jamesorjamie.com
+    service: http_status:404
+
+  # Authentik: the whole app (login pages, OAuth endpoints, admin UI).
+  - hostname: auth.jamesorjamie.com
+    service: http://192.168.1.51:9000
+
+  - service: http_status:404
