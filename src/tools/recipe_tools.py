@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import traceback
@@ -8,6 +9,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 
 from mealie import MealieFetcher
+from mealie.client import MealieApiError
 from models.recipe import RecipeCreate
 from recipe_times import add_readable_times
 from trim import trim_recipe_concise, trim_recipe_detail, trim_recipe_summary
@@ -19,6 +21,39 @@ NO_PUBLIC_URL = (
     "No link: MEALIE_PUBLIC_URL (the address people open Mealie at) isn't set on the "
     "MCP server"
 )
+
+
+# Tag put on recipes built from social media posts. Unlike other tags, create_recipe
+# creates it on first use instead of dropping it.
+SOCIAL_TAG = "from-social"
+
+EMPTY_IMPORT = (
+    "Mealie created a recipe from this source but found no ingredients or no "
+    "instructions in it. It was kept, because this server never deletes recipes. "
+    "Build the recipe with create_recipe instead, and tell the user the empty one "
+    "can be deleted in Mealie."
+)
+
+
+def import_error(e: Exception) -> str:
+    """A short reason for a failed import, from Mealie's error body when it has one."""
+    if isinstance(e, TimeoutError):
+        return (
+            "Mealie took too long to import this page. It may still finish in the "
+            "background, so search with get_recipes before trying again."
+        )
+    if isinstance(e, MealieApiError):
+        message = None
+        try:
+            detail = json.loads(e.response_text or "").get("detail")
+            if isinstance(detail, dict):
+                message = detail.get("message") or detail.get("error")
+            elif isinstance(detail, str):
+                message = detail
+        except (ValueError, AttributeError):
+            pass
+        return f"Mealie could not import it ({e.status_code}): {message or e.response_text or e.message}"
+    return f"Import failed: {e}"
 
 
 def register_recipe_tools(mcp: FastMCP, mealie: MealieFetcher) -> None:
@@ -66,6 +101,35 @@ def register_recipe_tools(mcp: FastMCP, mealie: MealieFetcher) -> None:
         except Exception as e:
             logger.warning({"message": "Could not fetch lastMade", "slug": slug, "error": str(e)})
         return recipe
+
+    def import_summary(created: Any) -> Dict[str, Any]:
+        """What an import produced, so the assistant can tell a good scrape from an
+        empty shell without reading the whole recipe."""
+        slug = created if isinstance(created, str) else (created or {}).get("slug")
+        if not slug:
+            return {"ok": False, "reason": f"Mealie did not return a recipe slug: {created!r}"}
+        recipe = mealie.get_recipe(slug)
+        ingredients = recipe.get("recipeIngredient") or []
+        instructions = recipe.get("recipeInstructions") or []
+        out: Dict[str, Any] = {
+            "ok": bool(ingredients) and bool(instructions),
+            "slug": slug,
+            "name": recipe.get("name"),
+            "ingredientCount": len(ingredients),
+            "instructionCount": len(instructions),
+            "hasImage": bool(recipe.get("image")),
+            "orgURL": recipe.get("orgURL"),
+        }
+        try:
+            url = web_link(f"r/{slug}")
+        except Exception as e:
+            logger.warning({"message": "Could not build recipe link", "slug": slug, "error": str(e)})
+            url = None
+        if url:
+            out["url"] = url
+        if not out["ok"]:
+            out["reason"] = EMPTY_IMPORT
+        return out
 
     @mcp.tool()
     def get_recipes(
@@ -343,6 +407,13 @@ def register_recipe_tools(mcp: FastMCP, mealie: MealieFetcher) -> None:
            per-serving values — Mealie stores nutrition statically and never rescales it.
            Estimate from standard sources if exact values are unknown. All values are strings.
 
+        8. Source and picture: set orgURL to the link the recipe came from. Set imageUrl
+           to a direct image link if you have one; it is added after the recipe is saved
+           and a failure only shows in imageStatus, never fails the recipe.
+        9. For a recipe from a social media post (TikTok, Instagram, Facebook, YouTube),
+           include the "from-social" tag. It is created if it doesn't exist yet; other
+           unknown tags are dropped.
+
         The tool resolves all slug and name references to IDs automatically before saving.
         When nutrition data is provided, showNutrition is enabled automatically.
 
@@ -350,7 +421,7 @@ def register_recipe_tools(mcp: FastMCP, mealie: MealieFetcher) -> None:
         recipeCategory, tags, tools, recipeIngredient, recipeInstructions, prepTime,
         performTime (the cook/active time), totalTime, prepTimeSeconds,
         performTimeSeconds, totalTimeSeconds, recipeServings,
-        recipeYieldQuantity, recipeYield, orgURL, nutrition, notes. Worked example:
+        recipeYieldQuantity, recipeYield, orgURL, nutrition, notes, imageUrl. Worked example:
 
             {
               "name": "Quick Tomato Sauce",
@@ -409,6 +480,14 @@ def register_recipe_tools(mcp: FastMCP, mealie: MealieFetcher) -> None:
 
             resolved_categories = resolve_organizer(recipe.recipeCategory, mealie.get_categories, "category")
             resolved_tags = resolve_organizer(recipe.tags, mealie.get_tags, "tag")
+            wants_social = any(str(t).lower() == SOCIAL_TAG for t in recipe.tags)
+            has_social = any(str(t.get("slug", "")).lower() == SOCIAL_TAG for t in resolved_tags)
+            if wants_social and not has_social:
+                try:
+                    resolved_tags.append(mealie.create_tag(SOCIAL_TAG))
+                    logger.info({"message": "Created tag", "name": SOCIAL_TAG})
+                except Exception as e:
+                    logger.warning({"message": "Could not create tag", "name": SOCIAL_TAG, "error": str(e)})
             resolved_tools = resolve_organizer(recipe.tools, mealie.get_organizer_tools, "tool")
 
             # Step 3: Resolve ingredient food names and unit names → full objects
@@ -491,9 +570,115 @@ def register_recipe_tools(mcp: FastMCP, mealie: MealieFetcher) -> None:
                 patch_data["notes"] = recipe.notes
 
             # Step 5: PATCH with full data
-            return detailed(slug, mealie.patch_recipe(slug, patch_data))
+            result = detailed(slug, mealie.patch_recipe(slug, patch_data))
+
+            # Step 6: picture, best-effort: the recipe is already saved
+            if recipe.imageUrl:
+                try:
+                    mealie.scrape_recipe_image_from_url(slug, recipe.imageUrl)
+                    result["imageStatus"] = "set"
+                except Exception as e:
+                    logger.warning({"message": "Could not set recipe image", "slug": slug, "error": str(e)})
+                    result["imageStatus"] = f"failed: {e}. The recipe was saved without a picture."
+            return result
         except Exception as e:
             error_msg = f"Error creating recipe '{recipe.name}': {str(e)}"
+            logger.error({"message": error_msg})
+            logger.debug({"message": "Error traceback", "traceback": traceback.format_exc()})
+            raise ToolError(error_msg)
+
+    @mcp.tool()
+    def import_recipe_from_url(url: str, include_tags: bool = False) -> Dict[str, Any]:
+        """Import a recipe from a web page: Mealie fetches the page and reads its recipe.
+
+        Use this first for ordinary recipe websites and blogs. Don't use it for social
+        media posts (TikTok, Instagram, Facebook, YouTube): those pages have no recipe
+        markup, so build the recipe with create_recipe from the caption or screenshot.
+
+        Check the reply: ok=false means the import failed or came back without
+        ingredients or instructions. Then build the recipe yourself with create_recipe
+        (with orgURL set to this url) from what the user gave you, or ask them to paste
+        the recipe text.
+
+        Args:
+            url: The recipe page link
+            include_tags: Keep the page's keywords as tags (default false: pages tend
+                to carry many noisy keywords)
+
+        Returns:
+            Dict with ok, slug, name, ingredientCount, instructionCount, hasImage,
+            orgURL, url (the recipe in Mealie, when MEALIE_PUBLIC_URL is set), and a
+            reason when ok is false
+        """
+        logger.info({"message": "Importing recipe from URL", "url": url})
+        try:
+            created = mealie.import_recipe_from_url(url, include_tags=include_tags)
+        except Exception as e:
+            logger.warning({"message": "URL import failed", "url": url, "error": str(e)})
+            return {"ok": False, "orgURL": url, "reason": import_error(e)}
+        try:
+            return import_summary(created)
+        except Exception as e:
+            error_msg = f"Imported '{url}' but could not read the result: {e}"
+            logger.error({"message": error_msg})
+            logger.debug({"message": "Error traceback", "traceback": traceback.format_exc()})
+            raise ToolError(error_msg)
+
+    @mcp.tool()
+    def import_recipe_from_html(
+        data: str, source_url: Optional[str] = None, include_tags: bool = False
+    ) -> Dict[str, Any]:
+        """Import a recipe from page HTML or a schema.org Recipe JSON object that you
+        already have, e.g. when import_recipe_from_url failed because the site blocks
+        Mealie but the page content is available to you.
+
+        Only for HTML or JSON-LD that contains recipe markup. For plain text (a caption,
+        a screenshot transcription), use create_recipe instead.
+
+        Args:
+            data: The page HTML, or a JSON string of a https://schema.org/Recipe object
+            source_url: Where it came from; stored as the recipe's source link
+            include_tags: Keep keywords from the markup as tags (default false)
+
+        Returns:
+            Same shape as import_recipe_from_url
+        """
+        logger.info({"message": "Importing recipe from HTML/JSON", "url": source_url})
+        try:
+            created = mealie.import_recipe_from_html(data, url=source_url, include_tags=include_tags)
+        except Exception as e:
+            logger.warning({"message": "HTML import failed", "url": source_url, "error": str(e)})
+            return {"ok": False, "orgURL": source_url, "reason": import_error(e)}
+        try:
+            return import_summary(created)
+        except Exception as e:
+            error_msg = f"Imported the recipe but could not read the result: {e}"
+            logger.error({"message": error_msg})
+            logger.debug({"message": "Error traceback", "traceback": traceback.format_exc()})
+            raise ToolError(error_msg)
+
+    @mcp.tool()
+    def set_recipe_image(slug: str, image_url: str) -> Dict[str, Any]:
+        """Set or replace a recipe's picture from an image link. Mealie downloads the
+        image. This is the only change this server makes to an existing recipe.
+
+        Args:
+            slug: The recipe's slug
+            image_url: A direct link to the image (jpg, png, webp)
+
+        Returns:
+            Dict with ok, slug and url (the recipe in Mealie, when MEALIE_PUBLIC_URL is set)
+        """
+        try:
+            logger.info({"message": "Setting recipe image", "slug": slug, "url": image_url})
+            mealie.scrape_recipe_image_from_url(slug, image_url)
+            out: Dict[str, Any] = {"ok": True, "slug": slug}
+            url = web_link(f"r/{slug}")
+            if url:
+                out["url"] = url
+            return out
+        except Exception as e:
+            error_msg = f"Error setting the image for recipe '{slug}': {str(e)}"
             logger.error({"message": error_msg})
             logger.debug({"message": "Error traceback", "traceback": traceback.format_exc()})
             raise ToolError(error_msg)

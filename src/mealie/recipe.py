@@ -214,6 +214,64 @@ class RecipeMixin:
         logger.info({"message": "Scraping recipe image from URL", "slug": slug, "url": image_url})
         return self._handle_request("POST", f"/api/recipes/{slug}/image", json=payload)
 
+    def import_recipe_from_url(
+        self, url: str, include_tags: bool = False, include_categories: bool = False
+    ) -> str:
+        """Have Mealie scrape a recipe page and create a recipe from it.
+
+        Mealie fetches the page itself (from wherever Mealie runs), parses the
+        schema.org Recipe markup and saves the result.
+
+        Args:
+            url: The recipe page URL
+            include_tags: Keep keywords from the page as tags
+            include_categories: Keep categories from the page
+
+        Returns:
+            Slug of the newly created recipe
+        """
+        if not url:
+            raise ValueError("Recipe URL cannot be empty")
+
+        payload = {
+            "url": url,
+            "includeTags": include_tags,
+            "includeCategories": include_categories,
+        }
+        logger.info({"message": "Importing recipe from URL", "url": url})
+        return self._handle_request("POST", "/api/recipes/create/url", json=payload)
+
+    def import_recipe_from_html(
+        self,
+        data: str,
+        url: Optional[str] = None,
+        include_tags: bool = False,
+        include_categories: bool = False,
+    ) -> str:
+        """Create a recipe from page HTML or a schema.org Recipe JSON string.
+
+        Args:
+            data: Page HTML, or a JSON string of a https://schema.org/Recipe object
+            url: Optional source URL, stored as the recipe's original URL
+            include_tags: Keep keywords from the markup as tags
+            include_categories: Keep categories from the markup
+
+        Returns:
+            Slug of the newly created recipe
+        """
+        if not data or not data.strip():
+            raise ValueError("Recipe HTML/JSON cannot be empty")
+
+        payload: Dict[str, Any] = {
+            "data": data,
+            "includeTags": include_tags,
+            "includeCategories": include_categories,
+        }
+        if url:
+            payload["url"] = url
+        logger.info({"message": "Importing recipe from HTML/JSON", "url": url, "size": len(data)})
+        return self._handle_request("POST", "/api/recipes/create/html-or-json", json=payload)
+
     def upload_recipe_image(self, slug: str, image_data: bytes, filename: str) -> Dict[str, Any]:
         """Upload a recipe image file (multipart upload)
 

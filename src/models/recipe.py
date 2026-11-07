@@ -120,6 +120,11 @@ class RecipeCreate(BaseModel):
     )
     nutrition: Optional[RecipeNutritionCreate] = None
     notes: Optional[List[Dict[str, str]]] = None  # [{"title": "...", "text": "..."}]
+    # Picture for the recipe, set after creation. Best-effort: a failed image never
+    # fails the recipe. Named imageUrl because Mealie's own "image" field is an id.
+    imageUrl: Optional[str] = Field(
+        None, validation_alias=AliasChoices("imageUrl", "image", "image_url")
+    )
 
     @model_validator(mode="before")
     @classmethod

@@ -491,3 +491,85 @@ Calculate nutrition for: {period}
             AssistantMessage(system_content),
             UserMessage(user_content),
         ]
+
+    @mcp.prompt()
+    def import_recipe(source: str = "", caption: str = "") -> list[Message]:
+        """Saves a recipe from a link, a social media post, a caption or a screenshot
+        into Mealie, with as few questions as possible.
+
+        Args:
+            source: The link the recipe came from (website, TikTok, Instagram, Facebook, YouTube)
+            caption: Recipe text the user pasted (a post caption, a comment, notes)
+        """
+        system_content = """
+<context>
+The user is usually on their phone and wants a recipe they found saved to Mealie quickly.
+Save it without asking for approval first, then report what you saved. Ask a question only
+when there is no recipe to work from.
+
+Tools:
+- import_recipe_from_url: Mealie fetches a recipe website itself. Best for blogs and recipe sites.
+- import_recipe_from_html: for page HTML or schema.org JSON-LD you already have.
+- get_recipes: search the library, to avoid saving a duplicate.
+- get_tags / get_categories / get_foods / get_units: match the library's existing names.
+- create_recipe: save a recipe you built from text or an image.
+- set_recipe_image: add a picture afterwards, if you have a direct image link.
+</context>
+
+<instructions>
+## 1. Which path
+- Social media link (tiktok.com, instagram.com, facebook.com, fb.watch, youtube.com/shorts,
+  youtu.be) → path B. These pages have no recipe markup and you can't watch videos.
+- Any other website → path A.
+- No link, just text or an image → path B.
+
+## 2. Check for a duplicate
+Call get_recipes with a short search term from the dish name. If a clearly matching recipe
+exists, stop and give the user its name and link instead of saving another copy.
+
+## Path A: website
+1. Call import_recipe_from_url with the link.
+2. ok=true → done; go to the reply.
+3. ok=false → if the user also gave the recipe text or a screenshot, use path B with
+   orgURL set to the link. Otherwise say the site couldn't be imported and ask them to
+   paste the recipe or attach a screenshot. If the reason says an empty recipe was kept,
+   mention it can be deleted in Mealie.
+
+## Path B: caption, text or screenshot
+1. Use only what the user provided (caption, pasted text, screenshot, their own notes).
+   If they gave only a social link, ask for the caption or a screenshot of the recipe
+   and stop.
+2. Build the recipe:
+   - name: the dish, in plain words (no emoji, hashtags or creator handles).
+   - ingredients: split each into quantity, unit and food; keep prep words
+     ("diced", "room temperature") in the note. US units. Match units and foods to the
+     library with get_units / get_foods.
+   - instructions: one step per action, in the creator's order and wording, cleaned up.
+   - servings and times only if stated or obvious.
+   - orgURL: the source link.
+   - tags: "from-social" for social posts, plus 1-3 existing tags that fit (get_tags).
+   - category: one existing category that fits (get_categories), if any.
+   - notes: if you filled any gap (a missing quantity, an assumed oven temperature, a
+     step only shown in the video), add a note titled "Assumptions" listing each one.
+     Add the creator's handle in a note titled "Credit" when known.
+   - nutrition: estimate per serving, as create_recipe asks.
+3. Call create_recipe.
+
+## 3. Reply
+Keep it short: the recipe name, servings, the Mealie link if one came back, and the
+assumptions list if there is one. If imageStatus says the picture failed, say so in one line.
+</instructions>
+"""
+
+        parts = []
+        if source:
+            parts.append(f"Save this recipe to Mealie: {source}")
+        else:
+            parts.append("Save this recipe to Mealie.")
+        if caption:
+            parts.append(f"Here's the recipe text:\n\n{caption}")
+
+        return [
+            AssistantMessage(system_content),
+            UserMessage("\n\n".join(parts)),
+        ]
