@@ -1,5 +1,7 @@
 # Mealie MCP Server
 
+> **Fork of [amercat37/mealie-mcp-server](https://github.com/amercat37/mealie-mcp-server)** (itself based on rldiao/mealie-mcp-server). This fork adds recipe import from URLs, page HTML and social posts (`import_recipe_from_url`, `import_recipe_from_html`, `set_recipe_image`, the `import_recipe` prompt) and Proxmox LXC deployment without Docker (see [`deploy/README.md`](deploy/README.md)). Build notes: [`PLAN.md`](PLAN.md).
+
 A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server for [Mealie](https://github.com/mealie-recipes/mealie) that lets AI assistants like Claude and ChatGPT read your recipe database, manage shopping lists, create and edit meal plans, and guide you through cooking — served over HTTP and secured with OAuth 2.0.
 
 ## ✨ Features
