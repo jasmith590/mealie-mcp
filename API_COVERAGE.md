@@ -20,7 +20,7 @@ This document compares the MCP server implementation against the official Mealie
 
 ## Detailed Coverage
 
-### ✅ Recipe Operations (6/14 implemented)
+### ✅ Recipe Operations (6/14 implemented upstream, 9/14 in this fork)
 
 **Implemented:**
 - ✅ `GET /api/recipes` - Search and filter the recipe library with pagination and advanced filtering
@@ -34,13 +34,13 @@ This document compares the MCP server implementation against the official Mealie
 - 🚫 `DELETE /api/recipes/{slug}` - Delete a recipe (used internally by the test suite via the fetcher; not exposed as an MCP tool)
 - 🚫 `PUT /api/recipes/{slug}` - Replace all fields of an existing recipe with a new version
 - 🚫 `PATCH /api/recipes/{slug}` - Update individual recipe fields without replacing the whole record
-- 🚫 `POST /api/recipes/{slug}/image` - Scrape and attach an image to a recipe from a URL
+- ✅ `POST /api/recipes/{slug}/image` - Scrape and attach an image to a recipe from a URL (`set_recipe_image`, `create_recipe` imageUrl; this fork)
 - 🚫 `PUT /api/recipes/{slug}/image` - Upload an image file directly to a recipe
 - 🚫 `POST /api/recipes/{slug}/assets` - Attach a file asset (PDF, etc.) to a recipe
-- 🚫 `POST /api/recipes/create/url` - Scrape a recipe from a web URL and import it into Mealie
+- ✅ `POST /api/recipes/create/url` - Scrape a recipe from a web URL and import it into Mealie (`import_recipe_from_url`; this fork)
 - 🚫 `POST /api/recipes/create/url/bulk` - Import multiple recipes from a list of URLs in one request
 - 🚫 `POST /api/recipes/create/zip` - Import recipes from a Mealie-formatted ZIP archive
-- 🚫 `POST /api/recipes/create/html-or-json` - Import a recipe from raw HTML or JSON-LD markup
+- ✅ `POST /api/recipes/create/html-or-json` - Import a recipe from raw HTML or JSON-LD markup (`import_recipe_from_html`; this fork)
 - 🚫 `PUT /api/recipes` - Apply full field replacement to multiple recipes in one request
 - 🚫 `PATCH /api/recipes` - Apply partial field updates to multiple recipes in one request
 
@@ -171,3 +171,9 @@ This document compares the MCP server implementation against the official Mealie
 - 🚫 `PATCH /api/users/self` - Update the current user's profile and preferences
 - 🚫 `POST /api/auth/token` - Obtain an API token by exchanging username and password credentials
 - 🚫 `POST /api/auth/refresh` - Refresh an expired API token
+
+
+## Fork notes
+
+- Not covered on purpose: `POST /api/recipes/create/ai` (uses Mealie's own OpenAI setup; the connected assistant already does that parsing) and `POST /api/recipes/create/url/bulk`.
+- Import payloads checked against Mealie's `ScrapeRecipe` / `ScrapeRecipeData` schemas (Nov 2026): `{url, includeTags, includeCategories}` and `{data, url?, includeTags, includeCategories}`; both answer 201 with the new slug.

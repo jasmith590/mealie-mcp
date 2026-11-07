@@ -4,6 +4,28 @@ All notable changes to this project will be documented here.
 
 ---
 
+## [1.1.0+jamie.0] — 2026-11-07 (fork)
+
+Fork of amercat37/mealie-mcp-server 1.0.25 for saving recipes from links and social posts, deployed on Proxmox without Docker.
+
+### Added
+
+- **`import_recipe_from_url`**: Mealie scrapes the page. Replies `{ok, slug, name, ingredientCount, instructionCount, hasImage, orgURL, url}`; `ok=false` with a reason on a Mealie error, a timeout or a scrape with no ingredients or instructions, so the assistant falls back to `create_recipe`. Empty imports are reported and kept, never deleted.
+- **`import_recipe_from_html`**: the same for page HTML or schema.org JSON-LD the assistant already has.
+- **`set_recipe_image`**: set a picture from an image link. Images are the one change this server makes to existing recipes.
+- **`create_recipe` `imageUrl`** (aliases `image`, `image_url`): best-effort picture after saving, reported in `imageStatus`. The `from-social` tag is created on first use; other unknown tags are still dropped.
+- **`import_recipe` prompt**: routes websites to URL import and social posts to a caption/screenshot build, checks for duplicates, notes assumptions, keeps the reply short for phones.
+- **`GET /healthz`**: no auth, no Mealie call.
+- **`MCP_HOST`, `MCP_PORT`, `LOG_FILE`** settings. Logs go to stdout only unless `LOG_FILE` is set.
+- **`deploy/`**: Proxmox LXC install (`install.sh`, `update.sh`, systemd unit, env example, cloudflared example, README).
+- `tests/test_import_tools.py` (38 checks, no live Mealie).
+
+### Changed
+
+- `uv.lock` is committed so the LXC install syncs exact versions.
+
+---
+
 ## [1.0.25] — 2026-11-04
 
 Smaller tool output. Mealie nests full copies of tags, categories, tools, foods, units and labels — each with internal ids, timestamps and a `recipeCount` that is always 0 on these copies — inside recipes, list items and meal plan entries. The tools now return what an assistant needs.
