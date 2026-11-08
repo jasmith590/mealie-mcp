@@ -51,10 +51,29 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq git curl ca-certificates >/dev/null
 
-if ! command -v uv >/dev/null 2>&1; then
-  say "Installing uv to /usr/local/bin"
-  curl -LsSf https://astral.sh/uv/install.sh | env UV_UNMANAGED_INSTALL=/usr/local/bin sh
+# uv must end up somewhere the service user can run it: /usr/local/bin.
+# A uv found elsewhere (e.g. root's ~/.local/bin, which the service user can't
+# reach) is copied there.
+UV_BIN="/usr/local/bin/uv"
+if [[ ! -x "$UV_BIN" ]]; then
+  if command -v uv >/dev/null 2>&1; then
+    say "Copying $(command -v uv) to ${UV_BIN}"
+    install -m 0755 "$(command -v uv)" "$UV_BIN"
+  else
+    say "Installing uv to /usr/local/bin"
+    curl -LsSf https://astral.sh/uv/install.sh | env UV_UNMANAGED_INSTALL=/usr/local/bin sh
+  fi
 fi
+if [[ ! -x "$UV_BIN" ]]; then
+  for candidate in /root/.local/bin/uv /root/.cargo/bin/uv; do
+    if [[ -x "$candidate" ]]; then
+      install -m 0755 "$candidate" "$UV_BIN"
+      break
+    fi
+  done
+fi
+[[ -x "$UV_BIN" ]] || die "uv did not install. Try by hand: curl -LsSf https://astral.sh/uv/install.sh | env UV_UNMANAGED_INSTALL=/usr/local/bin sh"
+"$UV_BIN" --version
 
 say "Creating the ${APP_USER} service user"
 if ! id "$APP_USER" >/dev/null 2>&1; then
@@ -90,7 +109,7 @@ fi
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 
 say "Installing Python 3.12 and dependencies with uv (frozen to uv.lock)"
-as_app bash -c "cd '$APP_DIR' && uv sync --frozen --no-dev --python 3.12"
+as_app bash -c "cd '$APP_DIR' && '$UV_BIN' sync --frozen --no-dev --python 3.12"
 
 say "Setting up ${ENV_FILE}"
 install -d -m 0750 "$ENV_DIR"

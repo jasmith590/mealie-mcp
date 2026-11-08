@@ -28,7 +28,9 @@ AFTER="$(rgit rev-parse --short HEAD)"
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 echo "Code: ${BEFORE} -> ${AFTER}"
 
-as_app bash -c "cd '$APP_DIR' && uv sync --frozen --no-dev --python 3.12"
+UV_BIN="/usr/local/bin/uv"
+[[ -x "$UV_BIN" ]] || { echo "uv not found at ${UV_BIN}; re-run deploy/install.sh" >&2; exit 1; }
+as_app bash -c "cd '$APP_DIR' && '$UV_BIN' sync --frozen --no-dev --python 3.12"
 install -m 0644 "${APP_DIR}/deploy/mealie-mcp.service" /etc/systemd/system/mealie-mcp.service
 systemctl daemon-reload
 systemctl restart mealie-mcp
