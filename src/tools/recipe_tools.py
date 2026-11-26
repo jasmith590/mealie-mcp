@@ -29,9 +29,9 @@ SOCIAL_TAG = "from-social"
 
 EMPTY_IMPORT = (
     "Mealie created a recipe from this source but found no ingredients or no "
-    "instructions in it. It was kept, because this server never deletes recipes. "
-    "Build the recipe with create_recipe instead, and tell the user the empty one "
-    "can be deleted in Mealie."
+    "instructions in it. It was kept. Build the recipe with create_recipe instead, "
+    "then try delete_empty_recipe on this slug; if it refuses (the import kept a "
+    "description or some ingredients), tell the user it can be deleted in Mealie."
 )
 
 
@@ -385,8 +385,10 @@ def register_recipe_tools(mcp: FastMCP, mealie: MealieFetcher) -> None:
            structurally. A unit with no catalog match is not dropped — it is appended
            to the ingredient's note so the text is preserved — but prefer matching an
            existing unit, since a note-only unit does not participate in scaling.
-        4. Always include "my-recipes" in tags (default). Use "the-autoimmune-solution"
-           instead if the recipe belongs to that cookbook.
+        4. Tags, categories and tools must already exist (check get_tags /
+           get_categories / get_cooking_tools). There is no default tag. Unknown ones
+           are left off the recipe and listed in the reply under droppedTags,
+           droppedCategories or droppedTools; tell the user about any that were dropped.
         5. Servings and yield — set only what fits the recipe (Mealie shows them separately):
            recipeServings is the number of people served (e.g. 4) — use it for most dishes.
            recipeYieldQuantity + recipeYield describe a produced amount: recipeYieldQuantity is
@@ -411,8 +413,8 @@ def register_recipe_tools(mcp: FastMCP, mealie: MealieFetcher) -> None:
            to a direct image link if you have one; it is added after the recipe is saved
            and a failure only shows in imageStatus, never fails the recipe.
         9. For a recipe from a social media post (TikTok, Instagram, Facebook, YouTube),
-           include the "from-social" tag. It is created if it doesn't exist yet; other
-           unknown tags are dropped.
+           include the "from-social" tag. It is created if it doesn't exist yet (the only
+           tag this tool creates).
 
         The tool resolves all slug and name references to IDs automatically before saving.
         When nutrition data is provided, showNutrition is enabled automatically.
@@ -426,7 +428,7 @@ def register_recipe_tools(mcp: FastMCP, mealie: MealieFetcher) -> None:
             {
               "name": "Quick Tomato Sauce",
               "recipeCategory": ["sauce"],
-              "tags": ["my-recipes"],
+              "tags": ["quick"],
               "recipeServings": 4,
               "recipeYieldQuantity": 2, "recipeYield": "cups",
               "prepTime": "10 minutes", "performTime": "20 minutes", "totalTime": "30 minutes",
@@ -448,15 +450,17 @@ def register_recipe_tools(mcp: FastMCP, mealie: MealieFetcher) -> None:
         try:
             logger.info({"message": "Creating recipe", "name": recipe.name})
 
-            # Step 1: POST to create skeleton, get slug
-            slug = mealie.create_recipe(recipe.name)
-            if not isinstance(slug, str):
-                slug = slug.get("slug", slug)
+            # Everything is resolved before the recipe exists. Mealie creates a recipe
+            # in two calls (POST a named skeleton, then PATCH the rest), so a failure
+            # between them used to leave an empty recipe behind, and every retry added
+            # another one with a "(1)", "(2)" suffix.
 
-            # Step 2: Resolve categories, tags, tools → full objects.
+            # Step 1: Resolve categories, tags, tools → full objects.
             # Match by slug OR name, case-insensitively, so a value the LLM sends as a
             # display name or wrong case ("Sauce" vs "sauce") resolves instead of being
             # silently dropped. Any genuinely-unmatched value is logged, not swallowed.
+            dropped: Dict[str, List[str]] = {}
+
             def resolve_organizer(
                 items: List[str], fetch_fn, kind: str = "organizer"
             ) -> List[Dict[str, Any]]:
@@ -476,6 +480,7 @@ def register_recipe_tools(mcp: FastMCP, mealie: MealieFetcher) -> None:
                         resolved.append(obj)
                     else:
                         logger.info({"message": f"{kind} not matched — dropped", "value": s})
+                        dropped.setdefault(kind, []).append(s)
                 return resolved
 
             resolved_categories = resolve_organizer(recipe.recipeCategory, mealie.get_categories, "category")
@@ -486,13 +491,76 @@ def register_recipe_tools(mcp: FastMCP, mealie: MealieFetcher) -> None:
                 try:
                     resolved_tags.append(mealie.create_tag(SOCIAL_TAG))
                     logger.info({"message": "Created tag", "name": SOCIAL_TAG})
+                    dropped["tag"] = [t for t in dropped.get("tag", []) if str(t).lower() != SOCIAL_TAG]
                 except Exception as e:
                     logger.warning({"message": "Could not create tag", "name": SOCIAL_TAG, "error": str(e)})
             resolved_tools = resolve_organizer(recipe.tools, mealie.get_organizer_tools, "tool")
 
-            # Step 3: Resolve ingredient food names and unit names → full objects
-            all_foods = mealie.get_foods(per_page=500).get("items", [])
-            food_lookup = {f["name"].lower(): f for f in all_foods if f.get("name")}
+            # Step 2: Resolve ingredient food names and unit names → full objects.
+            # Foods are looked up one name at a time with Mealie's search, never from
+            # one big page: Mealie seeds thousands of foods, so a single page missed
+            # most of them, and the "missing" food was re-created, which Mealie
+            # refused as a duplicate. A name matches a food's name, plural name or
+            # any alias, case-insensitively.
+            food_cache: Dict[str, Dict[str, Any]] = {}
+
+            def food_names(f: Dict[str, Any]) -> List[str]:
+                names = [f.get("name"), f.get("pluralName")]
+                names += [a.get("name") for a in f.get("aliases") or [] if isinstance(a, dict)]
+                return [str(n).strip().lower() for n in names if n]
+
+            def search_food(name: str) -> Optional[Dict[str, Any]]:
+                key = name.strip().lower()
+                terms = [name.strip()]
+                # Mealie's search may not find "sweet potato" from "sweet potatoes";
+                # try the obvious singular too, then match exactly on names.
+                for suffix in ("es", "s"):
+                    if key.endswith(suffix) and len(key) > len(suffix) + 2:
+                        terms.append(name.strip()[: -len(suffix)])
+                for term in terms:
+                    items = mealie.get_foods(search=term, per_page=100).get("items", [])
+                    for f in items:
+                        if key in food_names(f):
+                            return f
+                return None
+
+            def as_food_id(value: str) -> Optional[str]:
+                try:
+                    return str(uuid.UUID(value.strip()))
+                except ValueError:
+                    return None
+
+            def resolve_food(name: str) -> Dict[str, Any]:
+                key = name.strip().lower()
+                if key in food_cache:
+                    return food_cache[key]
+                # A food id is looked up, never saved as a new food's name.
+                food_id = as_food_id(name)
+                if food_id:
+                    try:
+                        food = mealie.get_food(food_id)
+                    except MealieApiError as e:
+                        if e.status_code == 404:
+                            raise ValueError(f"No food with id {food_id}; pass the food's name instead")
+                        raise
+                    food_cache[key] = food
+                    return food
+                food = search_food(name)
+                if food is None:
+                    try:
+                        food = mealie.create_food(name.strip())
+                        logger.info({"message": "Auto-created food", "name": name})
+                    except MealieApiError as e:
+                        # Lost a race, or the search missed it: Mealie says it exists,
+                        # so use that one instead of failing the whole recipe.
+                        if e.status_code != 409:
+                            raise
+                        food = search_food(name)
+                        if food is None:
+                            raise
+                for n in food_names(food) + [key]:
+                    food_cache[n] = food
+                return food
 
             all_units = mealie.get_organizer_units(per_page=200).get("items", [])
             unit_lookup = {u["name"].lower(): u for u in all_units}
@@ -512,13 +580,7 @@ def register_recipe_tools(mcp: FastMCP, mealie: MealieFetcher) -> None:
                     resolved["note"] = ing.note
                 resolved["disableAmount"] = ing.disableAmount
                 if ing.food:
-                    food_obj = food_lookup.get(ing.food.lower())
-                    if not food_obj:
-                        created = mealie.create_food(ing.food)
-                        food_lookup[ing.food.lower()] = created
-                        food_obj = created
-                        logger.info({"message": "Auto-created food", "name": ing.food})
-                    resolved["food"] = food_obj
+                    resolved["food"] = resolve_food(ing.food)
                 if ing.unit:
                     unit_obj = unit_lookup.get(ing.unit.lower())
                     if unit_obj:
@@ -541,7 +603,7 @@ def register_recipe_tools(mcp: FastMCP, mealie: MealieFetcher) -> None:
                         )
                 resolved_ingredients.append(resolved)
 
-            # Step 4: Build patch payload
+            # Step 3: Build patch payload
             patch_data: Dict[str, Any] = {
                 "recipeCategory": resolved_categories,
                 "tags": resolved_tags,
@@ -569,10 +631,28 @@ def register_recipe_tools(mcp: FastMCP, mealie: MealieFetcher) -> None:
             if recipe.notes:
                 patch_data["notes"] = recipe.notes
 
-            # Step 5: PATCH with full data
-            result = detailed(slug, mealie.patch_recipe(slug, patch_data))
+            # Step 4: create the recipe, then fill it in. If the fill fails, remove
+            # the skeleton this call just made so no empty recipe is left behind.
+            slug = mealie.create_recipe(recipe.name)
+            if not isinstance(slug, str):
+                slug = slug.get("slug", slug)
+            try:
+                saved = mealie.patch_recipe(slug, patch_data)
+            except Exception:
+                try:
+                    mealie.delete_empty_recipe(slug)
+                    logger.info({"message": "Removed empty recipe after failed save", "slug": slug})
+                except Exception as cleanup_error:
+                    logger.warning(
+                        {"message": "Could not remove empty recipe", "slug": slug, "error": str(cleanup_error)}
+                    )
+                raise
+            result = detailed(slug, saved)
+            for kind, key in (("tag", "droppedTags"), ("category", "droppedCategories"), ("tool", "droppedTools")):
+                if dropped.get(kind):
+                    result[key] = dropped[kind]
 
-            # Step 6: picture, best-effort: the recipe is already saved
+            # Step 5: picture, best-effort: the recipe is already saved
             if recipe.imageUrl:
                 try:
                     mealie.scrape_recipe_image_from_url(slug, recipe.imageUrl)
@@ -660,7 +740,7 @@ def register_recipe_tools(mcp: FastMCP, mealie: MealieFetcher) -> None:
     @mcp.tool()
     def set_recipe_image(slug: str, image_url: str) -> Dict[str, Any]:
         """Set or replace a recipe's picture from an image link. Mealie downloads the
-        image. This is the only change this server makes to an existing recipe.
+        image.
 
         Args:
             slug: The recipe's slug
@@ -681,6 +761,52 @@ def register_recipe_tools(mcp: FastMCP, mealie: MealieFetcher) -> None:
             error_msg = f"Error setting the image for recipe '{slug}': {str(e)}"
             logger.error({"message": error_msg})
             logger.debug({"message": "Error traceback", "traceback": traceback.format_exc()})
+            raise ToolError(error_msg)
+
+    @mcp.tool()
+    def rename_recipe(slug: str, name: str) -> Dict[str, Any]:
+        """Rename a recipe. Mealie changes the slug to match the new name, so use the
+        slug in the reply from now on. Use it to drop a "(1)" or "(2)" suffix once the
+        empty copies are deleted (a name still taken gets a new suffix).
+
+        Args:
+            slug: The recipe's current slug
+            name: The new name
+
+        Returns:
+            Dict[str, Any]: The recipe, as get_recipe_detailed returns it, under its new slug
+        """
+        if not name or not name.strip():
+            raise ToolError("The new name cannot be empty")
+        try:
+            logger.info({"message": "Renaming recipe", "slug": slug, "name": name})
+            saved = mealie.patch_recipe(slug, {"name": name.strip()})
+            return detailed(saved.get("slug", slug), saved)
+        except Exception as e:
+            error_msg = f"Error renaming recipe '{slug}': {str(e)}"
+            logger.error({"message": error_msg})
+            logger.debug({"message": "Error traceback", "traceback": traceback.format_exc()})
+            raise ToolError(error_msg)
+
+    @mcp.tool()
+    def delete_empty_recipe(slug: str) -> Dict[str, Any]:
+        """Delete an empty recipe, such as one left behind by a failed save. Refuses any
+        recipe with a description, linked ingredients, more than one ingredient or more
+        than one step, so it cannot delete a real recipe. Check with get_recipes (search
+        by name) which copy is the empty one before calling this.
+
+        Args:
+            slug: The empty recipe's slug
+
+        Returns:
+            Dict with ok, and the deleted recipe's slug and name
+        """
+        try:
+            logger.info({"message": "Deleting empty recipe", "slug": slug})
+            return {"ok": True, **mealie.delete_empty_recipe(slug)}
+        except Exception as e:
+            error_msg = f"Recipe '{slug}' was not deleted: {str(e)}"
+            logger.error({"message": error_msg})
             raise ToolError(error_msg)
 
     @mcp.tool()

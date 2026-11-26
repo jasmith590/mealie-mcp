@@ -31,7 +31,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from mcp.server.fastmcp import FastMCP
 
+from mealie.client import MealieApiError
 from mealie.mealplan import MealplanMixin
+from mealie.recipe import RecipeMixin, is_empty_recipe
 from mealie.shopping_list import merge_item
 from tools.mealplan_tools import register_mealplan_tools
 from tools.categories_tools import register_categories_tools
@@ -154,7 +156,7 @@ class FakeRecipes:
     def get_organizer_tools(self, per_page=None):
         return {"items": []}
 
-    def get_foods(self, per_page=None):
+    def get_foods(self, per_page=None, search=None):
         return {"items": [TOMATO]}
 
     def get_organizer_units(self, per_page=None):
@@ -186,6 +188,75 @@ class FakeRecipes:
         if self.last_made_error:
             raise ConnectionError("household lookup failed")
         return {"recipeId": "1", "lastMade": self.last_made}
+
+
+SWEET_POTATO = {**TOMATO, "id": "food-9", "name": "sweet potato", "pluralName": "sweet potatoes",
+                "aliases": [{"name": "yam"}]}
+EGG_ID = "1ec5df25-82d6-4302-b169-c0844a5e43a2"
+EGG = {**TOMATO, "id": EGG_ID, "name": "egg", "pluralName": "eggs"}
+
+
+class FakeCreate(FakeRecipes):
+    """create_recipe against a big food catalog, a racing duplicate, and a failing save."""
+
+    def __init__(self, patch_error=False, food_error=False):
+        super().__init__(last_made_error=False)
+        self.patch_error = patch_error
+        self.food_error = food_error
+        self.recipes_created = []
+        self.discarded = []
+        self.foods_created = []
+        self.catalog = [TOMATO, SWEET_POTATO, EGG]
+        self.tags_created = []
+
+    misses_left = 0
+
+    def get_foods(self, per_page=None, search=None):
+        if self.misses_left:
+            self.misses_left -= 1
+            return {"items": []}
+        if search is None:
+            # one big page: the seeded catalog is far bigger, sweet potato isn't on it
+            return {"items": [TOMATO]}
+        term = search.lower()
+        return {"items": [f for f in self.catalog if term in f["name"]]}
+
+    def create_food(self, name):
+        if self.food_error:
+            raise ConnectionError("foods endpoint down")
+        if any(name.lower() in (f["name"], f.get("pluralName")) for f in self.catalog):
+            raise MealieApiError(409, "This item already exists.")
+        food = {**TOMATO, "id": f"food-new-{len(self.foods_created)}", "name": name, "pluralName": None}
+        self.foods_created.append(food)
+        self.catalog.append(food)
+        return food
+
+    def create_recipe(self, name):
+        self.recipes_created.append(name)
+        return "chili"
+
+    def patch_recipe(self, slug, data):
+        if self.patch_error:
+            raise MealieApiError(500, "patch failed")
+        self.patched = data
+        if set(data) == {"name"}:  # a rename: Mealie re-slugs from the new name
+            return {**self.get_recipe(slug), "name": data["name"],
+                    "slug": data["name"].lower().replace(" ", "-")}
+        return self.get_recipe(slug)
+
+    def delete_empty_recipe(self, slug):
+        self.discarded.append(slug)
+        return {"slug": slug, "name": "x"}
+
+    def get_food(self, item_id):
+        for f in self.catalog:
+            if f["id"] == item_id:
+                return f
+        raise MealieApiError(404, "No Entry Found")
+
+    def create_tag(self, name):
+        self.tags_created.append(name)
+        return organizer(name, name)
 
 
 MEATS = {"name": "Meats", "color": "#6D4C41", "groupId": "g", "id": "lab-2"}
@@ -631,6 +702,129 @@ def run() -> None:
         os.environ.pop("MEALIE_PUBLIC_URL", None)
         if saved is not None:
             os.environ["MEALIE_PUBLIC_URL"] = saved
+
+
+    # ------------------------------------------------------------------
+    section("create_recipe: no duplicate foods, no empty recipes left behind")
+    # ------------------------------------------------------------------
+    body = {"recipe": {"name": "Sweet Potato Chili", "recipeIngredient": [
+        {"quantity": 2, "food": "sweet potato"}, {"quantity": 1, "food": "Sweet Potatoes"},
+        {"quantity": 1, "food": "yam"}, {"quantity": 1, "unit": "cup", "food": "crushed tomatoes"},
+        {"quantity": 1, "food": "crushed tomatoes"}],
+        "recipeInstructions": [{"text": "Simmer."}]}}
+    fake = FakeCreate()
+    srv = FastMCP("probe")
+    register_recipe_tools(srv, fake)
+    call(srv, "create_recipe", body)
+    ids = [i["food"]["id"] for i in fake.patched["recipeIngredient"]]
+    check("a food missing from the first page is found by search, not re-created",
+          ids[0] == "food-9", json.dumps(ids))
+    check("plural name and alias match the same food", ids[1] == ids[2] == "food-9", json.dumps(ids))
+    check("a truly new food is created once and reused",
+          len(fake.foods_created) == 1 and ids[3] == ids[4] == "food-new-0", json.dumps(ids))
+    check("one recipe created", fake.recipes_created == ["Sweet Potato Chili"], str(fake.recipes_created))
+
+    fake = FakeCreate()
+    fake.misses_left = 1  # the food was added a moment ago: the first search misses, then 409
+    srv = FastMCP("probe")
+    register_recipe_tools(srv, fake)
+    call(srv, "create_recipe", {"recipe": {"name": "Race", "recipeIngredient": [{"food": "sweet potato"}],
+                                           "recipeInstructions": [{"text": "x"}]}})
+    check("a 409 on create uses the existing food instead of failing",
+          fake.patched["recipeIngredient"][0]["food"]["id"] == "food-9" and not fake.foods_created,
+          json.dumps(fake.patched["recipeIngredient"][0]["food"].get("id")))
+
+    fake = FakeCreate(food_error=True)
+    srv = FastMCP("probe")
+    register_recipe_tools(srv, fake)
+    err = call_error(srv, "create_recipe", {"recipe": {"name": "Broken", "recipeIngredient": [
+        {"food": "dragon fruit"}], "recipeInstructions": [{"text": "x"}]}})
+    check("a failure while resolving ingredients creates no recipe at all",
+          "Broken" in err and fake.recipes_created == [] and fake.discarded == [], err[-120:])
+
+    fake = FakeCreate(patch_error=True)
+    srv = FastMCP("probe")
+    register_recipe_tools(srv, fake)
+    err = call_error(srv, "create_recipe", {"recipe": {"name": "Half Saved", "recipeIngredient": [
+        {"food": "tomato"}], "recipeInstructions": [{"text": "x"}]}})
+    check("a failed save removes the empty recipe it just created",
+          fake.recipes_created == ["Half Saved"] and fake.discarded == ["chili"], str(fake.discarded))
+
+
+    # ------------------------------------------------------------------
+    section("create_recipe: food ids, dropped tags; rename_recipe; delete_empty_recipe")
+    # ------------------------------------------------------------------
+    fake = FakeCreate()
+    srv = FastMCP("probe")
+    register_recipe_tools(srv, fake)
+    out = call(srv, "create_recipe", {"recipe": {"name": "Omelet",
+        "tags": ["my-recipes", "from-social"],
+        "recipeIngredient": [{"quantity": 2, "food": EGG_ID}, {"quantity": 1, "food": EGG_ID.upper()}],
+        "recipeInstructions": [{"text": "Whisk."}]}})
+    foods = [i["food"] for i in fake.patched["recipeIngredient"]]
+    check("a food id is looked up, not saved as a new food named after the id",
+          all(f["id"] == EGG_ID and f["name"] == "egg" for f in foods) and not fake.foods_created,
+          json.dumps([f.get("name") for f in foods]))
+    check("unknown tags are reported in droppedTags (from-social is created, not dropped)",
+          out.get("droppedTags") == ["my-recipes"] and fake.tags_created == ["from-social"],
+          json.dumps(out.get("droppedTags")))
+    check("no droppedCategories/droppedTools when nothing was dropped",
+          "droppedCategories" not in out and "droppedTools" not in out)
+    out = call(srv, "create_recipe", {"recipe": {"name": "Plain", "recipeInstructions": [{"text": "x"}]}})
+    check("no default tag: a recipe sent without tags gets none and drops none",
+          fake.patched["tags"] == [] and "droppedTags" not in out, json.dumps(fake.patched["tags"]))
+
+    fake = FakeCreate()
+    srv = FastMCP("probe")
+    register_recipe_tools(srv, fake)
+    err = call_error(srv, "create_recipe", {"recipe": {"name": "Ghost", "recipeIngredient": [
+        {"food": "00000000-0000-0000-0000-000000000000"}], "recipeInstructions": [{"text": "x"}]}})
+    check("an unknown food id fails before anything is created",
+          "No food with id" in err and fake.recipes_created == [] and not fake.foods_created, err[-120:])
+
+    renamed = call(srv, "rename_recipe", {"slug": "chili-2", "name": " Chili "})
+    check("rename_recipe sends only the trimmed name and returns the recipe under its new slug",
+          fake.patched == {"name": "Chili"} and renamed["slug"] == "chili" and renamed["name"] == "Chili",
+          json.dumps({"sent": fake.patched, "slug": renamed.get("slug")}))
+    check("rename_recipe refuses an empty name", "cannot be empty" in call_error(
+        srv, "rename_recipe", {"slug": "chili", "name": "  "}))
+    gone = call(srv, "delete_empty_recipe", {"slug": "chili-1"})
+    check("delete_empty_recipe tool deletes through the guarded fetcher method",
+          gone["ok"] and fake.discarded == ["chili-1"], json.dumps(gone))
+
+    placeholder = {"name": "Stub", "description": "",
+                   "recipeIngredient": [{"note": "1 Cup Flour", "food": None, "unit": None}],
+                   "recipeInstructions": [{"text": "Recipe steps go here"}]}
+    check("empty: a new recipe holding only Mealie's placeholders", is_empty_recipe(placeholder))
+    check("empty: nothing at all", is_empty_recipe({"name": "x"}))
+    check("not empty: has a description", not is_empty_recipe({**placeholder, "description": "Tasty"}))
+    check("not empty: an ingredient linked to a food", not is_empty_recipe(
+        {**placeholder, "recipeIngredient": [{"note": "", "food": TOMATO, "unit": None}]}))
+    check("not empty: two ingredients", not is_empty_recipe(
+        {**placeholder, "recipeIngredient": [{"note": "salt"}, {"note": "pepper"}]}))
+    check("not empty: two steps", not is_empty_recipe(
+        {**placeholder, "recipeInstructions": [{"text": "a"}, {"text": "b"}]}))
+
+    class Http(RecipeMixin):
+        def __init__(self, recipe):
+            self.recipe, self.calls = recipe, []
+
+        def _handle_request(self, method, url, **kw):
+            self.calls.append((method, url))
+            return self.recipe if method == "GET" else None
+
+    http = Http(placeholder)
+    http.delete_empty_recipe("stub")
+    check("fetcher deletes an empty recipe", http.calls == [("GET", "/api/recipes/stub"), ("DELETE", "/api/recipes/stub")],
+          str(http.calls))
+    http = Http({**placeholder, "description": "Real one"})
+    try:
+        http.delete_empty_recipe("chili")
+        refused = False
+    except ValueError as e:
+        refused = "was not deleted" in str(e)
+    check("fetcher refuses a recipe with content and never sends DELETE",
+          refused and ("DELETE", "/api/recipes/chili") not in http.calls, str(http.calls))
 
     # ------------------------------------------------------------------
     section("Shopping list tools trim lists and items")

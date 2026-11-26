@@ -133,7 +133,7 @@ class FakeMealie:
     def get_organizer_tools(self, per_page=None):
         return {"items": []}
 
-    def get_foods(self, per_page=None):
+    def get_foods(self, per_page=None, search=None):
         return {"items": [{"id": "f1", "name": "noodles"}]}
 
     def create_food(self, name):
@@ -214,7 +214,7 @@ def run() -> None:
     r = call(server(fake), "import_recipe_from_url", {"url": "https://blog.test/garlic-noodles"})
     check("empty shell: ok=false with the slug kept", r.get("ok") is False and r.get("slug") == "garlic-noodles",
           str(r))
-    check("empty shell: says it was kept, not deleted", "never deletes" in r.get("reason", ""), r.get("reason", ""))
+    check("empty shell: says it was kept and how to delete it", "It was kept" in r.get("reason", "") and "delete_empty_recipe" in r.get("reason", ""), r.get("reason", ""))
 
     err = MealieApiError(400, "API error", json.dumps({"detail": {"message": "No Recipe Found"}}))
     r = call(server(FakeMealie(import_error=err)), "import_recipe_from_url", {"url": "https://x.test"})

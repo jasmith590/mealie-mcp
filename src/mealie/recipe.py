@@ -6,6 +6,16 @@ from utils import format_api_params
 logger = logging.getLogger("mealie-mcp")
 
 
+def is_empty_recipe(recipe: Dict[str, Any]) -> bool:
+    """True for a recipe with only Mealie's new-recipe placeholders in it."""
+    if (recipe.get("description") or "").strip():
+        return False
+    ingredients = recipe.get("recipeIngredient") or []
+    if len(ingredients) > 1 or any(i.get("food") or i.get("unit") for i in ingredients):
+        return False
+    return len(recipe.get("recipeInstructions") or []) <= 1
+
+
 class RecipeMixin:
     """Mixin class for recipe-related API endpoints"""
 
@@ -435,3 +445,29 @@ class RecipeMixin:
 
         logger.info({"message": "Deleting recipe", "slug": slug})
         return self._handle_request("DELETE", f"/api/recipes/{slug}")
+
+    def delete_empty_recipe(self, slug: str) -> Dict[str, Any]:
+        """Delete a recipe only if it is still empty.
+
+        Empty means what Mealie leaves after creating a recipe from just a name: no
+        description, at most one ingredient with no food or unit linked (Mealie's
+        placeholder), and at most one step (also a placeholder). Anything with real
+        content is refused, so this can only clean up stubs from failed saves.
+
+        Returns:
+            Dict with the deleted recipe's slug and name
+
+        Raises:
+            ValueError: if the recipe has content
+        """
+        if not slug:
+            raise ValueError("Recipe slug cannot be empty")
+        recipe = self._handle_request("GET", f"/api/recipes/{slug}")
+        if not is_empty_recipe(recipe):
+            raise ValueError(
+                f"'{recipe.get('name', slug)}' has ingredients, steps or a description, so it "
+                "was not deleted. Only empty recipes (left by a failed save) can be deleted here."
+            )
+        logger.info({"message": "Deleting empty recipe", "slug": slug})
+        self._handle_request("DELETE", f"/api/recipes/{slug}")
+        return {"slug": slug, "name": recipe.get("name")}

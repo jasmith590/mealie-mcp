@@ -4,6 +4,29 @@ All notable changes to this project will be documented here.
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`rename_recipe`**: rename a recipe (PATCH with the name only). Mealie re-slugs from the new name, and the reply is the recipe under its new slug.
+- **`delete_empty_recipe`**: delete a recipe only if it is empty: no description, at most one ingredient with no food or unit linked, and at most one step (Mealie's new-recipe placeholders). Anything with content is refused before any DELETE is sent. The guard lives in the fetcher (`delete_empty_recipe`, `is_empty_recipe`), so `create_recipe`'s rollback uses the same check.
+- **`create_recipe` reports what it dropped**: unknown tags, categories and tools come back as `droppedTags`, `droppedCategories` and `droppedTools` instead of vanishing silently.
+
+### Changed
+
+- **No default tag.** `create_recipe` defaulted to the `my-recipes` tag and its instructions said to always add it (with `the-autoimmune-solution` as the alternative), both from the upstream author's library. Neither tag exists here, so every recipe dropped it. Recipes now get only the tags sent, and the `recipe_builder` prompt's `cookbook` setting is an optional existing tag.
+- The empty-import message says to try `delete_empty_recipe` before asking the user to delete it in Mealie.
+
+### Fixed
+
+- **A food id in an ingredient is looked up, not saved as a food's name.** Passing a food's UUID in `food` created a new food literally named after the id. It now fetches that food; an unknown id fails before anything is created.
+
+- **`create_recipe` no longer leaves empty recipes behind.** It POSTed the recipe skeleton first, then resolved foods, then PATCHed. Any failure in between left an empty recipe, and every retry added another ("Name (1)", "Name (2)"). Everything is now resolved before the recipe is created, and if the PATCH fails the skeleton this call just made is deleted (`discard_new_recipe`, internal, not a tool).
+- **`create_recipe` matches existing foods instead of re-creating them.** Foods were matched against a single page of 500, but Mealie seeds thousands, so common foods like "sweet potato" or "yellow onion" were missed, re-created, and refused by Mealie as duplicates (409). Each food name is now looked up with Mealie's search and matched on name, plural name or alias, case-insensitively, with a singular fallback ("sweet potatoes" finds "sweet potato"). A 409 on create falls back to the existing food.
+- `tests/test_tool_helpers.py`: 23 new checks for the above (125 total).
+
+---
+
 ## [1.1.0+jamie.0] — 2026-11-07 (fork)
 
 Fork of amercat37/mealie-mcp-server 1.0.25 for saving recipes from links and social posts, deployed on Proxmox without Docker.

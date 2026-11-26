@@ -132,7 +132,7 @@ period="Monday"
 
 ### recipe_builder
 
-**What it does:** Guides the creation of a new recipe in Mealie using your existing conventions. Fetches 2-3 similar recipes first to observe how you use categories, tags, and tools — then follows those patterns exactly. Matches ingredients to your existing food library before creating new ones. New foods get a shopping list label (aisle) assigned. Defaults to the "My Recipes" cookbook.
+**What it does:** Guides the creation of a new recipe in Mealie using your existing conventions. Fetches 2-3 similar recipes first to observe how you use categories, tags, and tools — then follows those patterns exactly. Matches ingredients to your existing food library before creating new ones. New foods get a shopping list label (aisle) assigned. Puts on an existing tag if you name one; there is no default tag.
 
 **Parameters:**
 
@@ -140,13 +140,12 @@ period="Monday"
 |---|---|---|
 | `name` | _(empty)_ | Recipe name if already known |
 | `source` | _(empty)_ | Where the recipe comes from (website, cookbook, memory) |
-| `cookbook` | `"my-recipes"` | Cookbook tag to assign — `"my-recipes"` or `"the-autoimmune-solution"` |
+| `cookbook` | _(empty)_ | An existing tag to put on the recipe (optional) |
 
 **Examples:**
 ```
 name="Beef Stew", source="from memory"
-name="Banana Bread", source="King Arthur Flour website", cookbook="my-recipes"
-cookbook="the-autoimmune-solution"
+name="Banana Bread", source="King Arthur Flour website", cookbook="baking"
 ```
 
 **What happens behind the scenes:**
@@ -298,12 +297,28 @@ Creates a fully structured recipe in one call. Resolves category/tag/tool slugs 
 ```
 "Add a new recipe: Beef Stew — serves 6, 3 hours, categories: Dinner, Soup"
 "Create a recipe called Green Smoothie with spinach, banana, almond milk, and honey"
-"Add the autoimmune solution chicken recipe"
+"Add this TikTok chicken recipe" (with a screenshot)
 ```
 
-> **Tip:** Always let the assistant fetch existing similar recipes first so it can match your category/tag conventions. New foods are created automatically if they don't exist in the library.
+> **Tip:** Always let the assistant fetch existing similar recipes first so it can match your category/tag conventions. New foods are created automatically if they don't exist in the library. Tags, categories and tools must already exist; any that don't are listed in the reply as `droppedTags`, `droppedCategories` or `droppedTools` (only `from-social` is created).
 
 ---
+
+### rename_recipe — PATCH /api/recipes/{slug}
+
+Renames a recipe. Mealie changes the slug to match, and the reply carries the new one.
+
+```
+"Rename Cheeseburger Soup (2) to Cheeseburger Soup"
+```
+
+### delete_empty_recipe — DELETE /api/recipes/{slug}
+
+Deletes a recipe only if it is empty: no description, at most one unlinked ingredient and at most one step (what Mealie puts in a new recipe). Anything with real content is refused, so it can't remove a real recipe.
+
+```
+"Delete the empty Sweet Potato Casserole stub"
+```
 
 ### duplicate_recipe — POST /api/recipes/{slug}/duplicate
 

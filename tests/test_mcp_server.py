@@ -80,7 +80,7 @@ def section(title: str) -> None:
 EXPECTED_TOOLS = {
     # Recipes
     "get_recipes", "get_recipe_detailed", "get_recipe_concise",
-    "create_recipe", "duplicate_recipe",
+    "create_recipe", "duplicate_recipe", "rename_recipe", "delete_empty_recipe",
     "mark_recipe_last_made",
     "get_recipe_comments", "create_recipe_comment",
     "get_recipe_timeline",

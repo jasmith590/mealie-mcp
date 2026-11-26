@@ -318,7 +318,7 @@ Review period: {period}
     def recipe_builder(
         name: str = "",
         source: str = "",
-        cookbook: str = "my-recipes",
+        cookbook: str = "",
     ) -> list[Message]:
         """Guides the creation of a new recipe in Mealie using your existing
         category, tag, tool, and food conventions.
@@ -326,10 +326,11 @@ Review period: {period}
         Args:
             name: Recipe name if already known (leave empty to discuss first)
             source: Where the recipe comes from (website, cookbook, memory, etc.)
-            cookbook: Which cookbook to assign — "my-recipes" (default) or "the-autoimmune-solution"
+            cookbook: An existing tag to put on the recipe (optional)
         """
         source_note = f"Source: {source}" if source else "Source: not specified."
         name_note = f'Recipe name: "{name}"' if name else "Recipe name: to be determined."
+        tag_note = cookbook or "none requested; follow the tags on similar recipes"
 
         system_content = f"""
 <context>
@@ -349,7 +350,7 @@ You have access to a Mealie MCP server. Use the following tools to build and sav
 ## Setup
 {name_note}
 {source_note}
-Cookbook tag to assign: {cookbook}
+Tag to assign: {tag_note}
 
 ## Step 1 — Learn the conventions
 Before asking the user for any details, fetch 2-3 existing recipes that are similar in type
@@ -362,7 +363,7 @@ Ask the user for all required details conversationally. Collect:
 - Name (if not provided)
 - Description (1-2 sentences)
 - Categories (match existing patterns)
-- Tags (match existing patterns; always include "{cookbook}")
+- Tags (only existing tags, matching similar recipes; include the tag to assign above if one was given)
 - Required cooking tools (match existing patterns)
 - Ingredients — for each: quantity, unit, food name, and any note
 - Instructions — numbered steps; use section headers if needed
@@ -533,7 +534,7 @@ exists, stop and give the user its name and link instead of saving another copy.
 3. ok=false → if the user also gave the recipe text or a screenshot, use path B with
    orgURL set to the link. Otherwise say the site couldn't be imported and ask them to
    paste the recipe or attach a screenshot. If the reason says an empty recipe was kept,
-   mention it can be deleted in Mealie.
+   follow what it says about deleting it.
 
 ## Path B: caption, text or screenshot
 1. Use only what the user provided (caption, pasted text, screenshot, their own notes).

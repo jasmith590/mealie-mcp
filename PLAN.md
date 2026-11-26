@@ -108,4 +108,4 @@ Per upstream README "OAuth / Authentik Setup": slug `mealie-mcp`, Confidential, 
 1. ~~How is Mealie exposed?~~ UniFi port forward → Nginx Proxy Manager. Answered.
 2. Mealie reports `"version": "develop"`, so the v3.30.0+ requirement can't be read from the API. The first LAN test in 3b (a URL import plus `get_recipe_detailed`) is the real check.
 3. SSH access to the new LXCs for Claude Code, or scripts only?
-4. Upstream's `create_recipe` instructions tell the assistant to tag `my-recipes` (the original author's library convention). Harmless (unknown tags are dropped) but worth replacing with your own default tag.
+4. Upstream's `create_recipe` instructions tell the assistant to tag `my-recipes` (the original author's library convention). Done 2026-11-26: no default tag; unknown tags are reported as `droppedTags`.

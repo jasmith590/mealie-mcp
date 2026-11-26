@@ -35,6 +35,8 @@ This document compares the MCP server implementation against the official Mealie
 - 🚫 `PUT /api/recipes/{slug}` - Replace all fields of an existing recipe with a new version
 - 🚫 `PATCH /api/recipes/{slug}` - Update individual recipe fields without replacing the whole record
 - ✅ `POST /api/recipes/{slug}/image` - Scrape and attach an image to a recipe from a URL (`set_recipe_image`, `create_recipe` imageUrl; this fork)
+- ✅ `PATCH /api/recipes/{slug}` (name only) - Rename a recipe (`rename_recipe`; this fork)
+- ✅ `DELETE /api/recipes/{slug}` - Delete an empty recipe only (`delete_empty_recipe`, and `create_recipe` rolling back a failed save; this fork)
 - 🚫 `PUT /api/recipes/{slug}/image` - Upload an image file directly to a recipe
 - 🚫 `POST /api/recipes/{slug}/assets` - Attach a file asset (PDF, etc.) to a recipe
 - ✅ `POST /api/recipes/create/url` - Scrape a recipe from a web URL and import it into Mealie (`import_recipe_from_url`; this fork)

@@ -87,7 +87,7 @@ class RecipeCreate(BaseModel):
         default_factory=list,
         validation_alias=AliasChoices("recipeCategory", "categories"),
     )
-    tags: List[str] = Field(default_factory=lambda: ["my-recipes"])  # tag slugs; default my-recipes
+    tags: List[str] = Field(default_factory=list)  # tag slugs (or names); no default tag
     tools: List[str] = Field(default_factory=list)  # tool slugs
     recipeIngredient: List[RecipeIngredientCreate] = Field(
         default_factory=list,
