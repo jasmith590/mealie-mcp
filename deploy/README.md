@@ -127,6 +127,8 @@ Log in through Authentik when asked. The connector then shows up in the Claude p
 | Restart | `systemctl restart mealie-mcp` |
 | Settings | `/etc/mealie-mcp/mealie-mcp.env`, then restart |
 
+**Keeping yt-dlp current.** `get_social_caption` relies on yt-dlp, which TikTok and Instagram break every few weeks. When captions stop coming through, bump it and redeploy: `uv lock --upgrade-package yt-dlp`, commit, push, then run `update.sh`.
+
 If you installed by copying the folder (no GitHub remote), copy it again and re-run `install.sh` instead of `update.sh`.
 
 Add both new LXCs to your Proxmox backup job.

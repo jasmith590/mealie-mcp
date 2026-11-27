@@ -8,6 +8,7 @@ All notable changes to this project will be documented here.
 
 ### Added
 
+- **`get_social_caption`**: reads the caption, creator and thumbnail of a TikTok, Instagram, Facebook or YouTube post with yt-dlp (metadata only, no video download). TikTok falls back to its public oEmbed endpoint when yt-dlp breaks. Trailing hashtags are stripped. The `import_recipe` prompt now calls it when a social link arrives without a caption, uses the thumbnail as the recipe picture, and refuses to invent a recipe from a caption that has none. New dependency: `yt-dlp`. `tests/test_social.py`: 21 checks.
 - **`rename_recipe`**: rename a recipe (PATCH with the name only). Mealie re-slugs from the new name, and the reply is the recipe under its new slug.
 - **`delete_empty_recipe`**: delete a recipe only if it is empty: no description, at most one ingredient with no food or unit linked, and at most one step (Mealie's new-recipe placeholders). Anything with content is refused before any DELETE is sent. The guard lives in the fetcher (`delete_empty_recipe`, `is_empty_recipe`), so `create_recipe`'s rollback uses the same check.
 - **`create_recipe` reports what it dropped**: unknown tags, categories and tools come back as `droppedTags`, `droppedCategories` and `droppedTools` instead of vanishing silently.

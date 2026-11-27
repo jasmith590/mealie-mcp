@@ -12,6 +12,7 @@ from mealie import MealieFetcher
 from mealie.client import MealieApiError
 from models.recipe import RecipeCreate
 from recipe_times import add_readable_times
+from social import fetch_caption
 from trim import trim_recipe_concise, trim_recipe_detail, trim_recipe_summary
 
 logger = logging.getLogger("mealie-mcp")
@@ -668,12 +669,34 @@ def register_recipe_tools(mcp: FastMCP, mealie: MealieFetcher) -> None:
             raise ToolError(error_msg)
 
     @mcp.tool()
+    def get_social_caption(url: str) -> Dict[str, Any]:
+        """Read the caption of a TikTok, Instagram, Facebook or YouTube post, without
+        the video. Use it when the user shares a social media recipe link and didn't
+        paste the caption themselves.
+
+        Build the recipe from the caption with create_recipe: orgURL set to the link,
+        the creator in a "Credit" note, and the thumbnail as imageUrl. If the caption
+        has no real recipe (just "recipe in bio" or a dish name), say so and ask the
+        user for the recipe text or a screenshot instead of inventing one.
+
+        Args:
+            url: The post link, as shared from the app
+
+        Returns:
+            Dict with ok, platform, caption (trailing hashtags removed), creator,
+            creatorHandle, thumbnail and url; a reason when ok is false
+        """
+        logger.info({"message": "Reading social caption", "url": url})
+        return fetch_caption(url)
+
+    @mcp.tool()
     def import_recipe_from_url(url: str, include_tags: bool = False) -> Dict[str, Any]:
         """Import a recipe from a web page: Mealie fetches the page and reads its recipe.
 
         Use this first for ordinary recipe websites and blogs. Don't use it for social
         media posts (TikTok, Instagram, Facebook, YouTube): those pages have no recipe
-        markup, so build the recipe with create_recipe from the caption or screenshot.
+        markup, so read the post with get_social_caption and build the recipe with
+        create_recipe.
 
         Check the reply: ok=false means the import failed or came back without
         ingredients or instructions. Then build the recipe yourself with create_recipe
